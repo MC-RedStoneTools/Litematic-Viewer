@@ -1,0 +1,50 @@
+# Build directories
+build/
+build_mingw/
+cmake-build-*/
+
+# Compiled binaries
+*.exe
+*.dll
+*.so
+*.dylib
+*.o
+*.obj
+*.a
+*.lib
+
+# IDE files
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.sln.docstates
+*.swp
+*.swo
+
+# Logs
+*.log
+output.log
+
+# Test data files
+*.litematic
+!test/*.litematic
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Misc files (docs, scripts, etc.)
+misc/
+
+# External projects
+Litematic_V7_To_V6/
+Litematica-viewer/
+mc1.21.10/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile

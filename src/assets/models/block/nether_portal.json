@@ -1,0 +1,18 @@
+{
+    "ambientocclusion": false,
+    "textures": {
+        "particle": "block/nether_portal",
+        "texture": "block/nether_portal"
+    },
+    "elements": [
+        {
+            "from": [0, 0, 6],
+            "to": [16, 16, 10],
+            "shade": false,
+            "faces": {
+                "north": { "uv": [0, 0, 16, 16], "texture": "#texture" },
+                "south": { "uv": [16, 0, 0, 16], "texture": "#texture" }
+            }
+        }
+    ]
+}
