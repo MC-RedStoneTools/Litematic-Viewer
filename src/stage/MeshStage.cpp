@@ -48,10 +48,16 @@ static void ConvertToMeshData(const BlockRenderData &renderData, int blockIdx, M
             mesh.vertices.push_back(v.r);
             mesh.vertices.push_back(v.g);
             mesh.vertices.push_back(v.b);
+            mesh.vertices.push_back(v.nx);
+            mesh.vertices.push_back(v.ny);
+            mesh.vertices.push_back(v.nz);
+            mesh.vertices.push_back(v.lu);
+            mesh.vertices.push_back(v.lv);
         }
 
         BlockDrawCall dc;
         dc.textureName = batch.textureName;
+        dc.blockName = blockName;
         dc.blockIndex = blockIdx;
         dc.firstVertex = firstVert;
         dc.vertexCount = static_cast<int>(batch.vertices.size());
@@ -139,12 +145,6 @@ static void BuildMesh(const RegionData &region, MeshData &mesh,
 static bool ProcessMeshBuild(PipelineContext &ctx)
 {
     if (ctx.regions.empty()) return false;
-
-    // 收集所有Region的palette到全局blockNames
-    const RegionData &firstRegion = ctx.regions[0];
-    ctx.mesh.blockNames.resize(firstRegion.palette.size());
-    for (size_t i = 0; i < firstRegion.palette.size(); i++)
-        ctx.mesh.blockNames[i] = firstRegion.palette[i].name;
 
     // 为每个Region生成网格
     for (size_t r = 0; r < ctx.regions.size(); r++)

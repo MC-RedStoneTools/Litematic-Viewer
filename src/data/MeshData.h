@@ -6,12 +6,14 @@
 
 // === 顶点格式定义 ===
 
-// 三角形顶点：位置(3) + UV(2) + 颜色(3) = 8个float
+// 三角形顶点：位置(3) + UV(2) + 颜色(3) + 法线(3) + 光照UV(2) = 13个float
 struct Vertex
 {
     float x, y, z;      // 位置
     float u, v;         // 纹理坐标
     float r, g, b;      // 颜色（调试用）
+    float nx, ny, nz;   // 法线方向
+    float lu, lv;       // 光照图坐标（天空光, 方块光）
 };
 
 // 线框顶点：位置(3) + 颜色(3) = 6个float
@@ -22,14 +24,15 @@ struct WireVertex
 };
 
 // 顶点格式常量
-constexpr int VERTEX_FLOAT_COUNT = sizeof(Vertex) / sizeof(float);           // 8
+constexpr int VERTEX_FLOAT_COUNT = sizeof(Vertex) / sizeof(float);           // 13
 constexpr int WIRE_VERTEX_FLOAT_COUNT = sizeof(WireVertex) / sizeof(float);  // 6
 
 // 方块绘制命令：记录每种纹理的顶点范围（纯数据，不含渲染策略）
 struct BlockDrawCall
 {
     std::string textureName;  // 纹理名（用于查找纹理，空表示使用方块默认纹理）
-    int blockIndex;           // 方块在palette中的索引（回退时使用）
+    std::string blockName;    // 方块名（纹理回退用）
+    int blockIndex;           // 方块在Region palette中的索引
     int firstVertex;          // 第一个顶点索引
     int vertexCount;          // 顶点数量
     bool isTransparent = false; // 是否半透明（决定渲染pass）

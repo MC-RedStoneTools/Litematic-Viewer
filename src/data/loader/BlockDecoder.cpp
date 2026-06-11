@@ -43,8 +43,6 @@ bool DecodeBlockStates(
     int bitsPerEntry = CalcBitsPerEntry(paletteSize);
     // 每个long能存储的索引数量
     int entriesPerLong = 64 / bitsPerEntry;
-    // 每个long中未使用的位数（高位填充）
-    int paddingBits = 64 - (entriesPerLong * bitsPerEntry);
 
     gLog.Debug("解码BlockStates: bitsPerEntry=%d, entriesPerLong=%d, longCount=%zu, totalBlocks=%d",
              bitsPerEntry, entriesPerLong, longCount, totalBlocks);
@@ -69,6 +67,11 @@ bool DecodeBlockStates(
         for (int j = 0; j < entriesPerLong && blockIndex < totalBlocks; j++)
         {
             uint16_t idx = static_cast<uint16_t>((value >> (j * bitsPerEntry)) & mask);
+            if (idx >= paletteSize)
+            {
+                gLog.Warn("palette索引越界: idx=%u, paletteSize=%zu", idx, paletteSize);
+                idx = 0;
+            }
             outBlocks[blockIndex++] = idx;
         }
     }

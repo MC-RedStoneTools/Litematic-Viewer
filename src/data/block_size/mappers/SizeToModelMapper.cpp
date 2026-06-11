@@ -214,6 +214,16 @@ void SizeToModelMapper::AddElementVertices(std::vector<MeshVertex> &vertices,
         vert.r = FACE_COLORS[faceIdx][0];
         vert.g = FACE_COLORS[faceIdx][1];
         vert.b = FACE_COLORS[faceIdx][2];
+        // 法线方向（每个面对应的朝向）
+        static const float FACE_NORMALS[6][3] = {
+            { 1, 0, 0}, {-1, 0, 0}, { 0, 1, 0}, { 0,-1, 0}, { 0, 0, 1}, { 0, 0,-1}
+        };
+        vert.nx = FACE_NORMALS[faceIdx][0];
+        vert.ny = FACE_NORMALS[faceIdx][1];
+        vert.nz = FACE_NORMALS[faceIdx][2];
+        // 光照UV：默认满光照（天空光=1, 方块光=1）
+        vert.lu = 0.875f;
+        vert.lv = 1.0f;
         vertices.push_back(vert);
     }
 }

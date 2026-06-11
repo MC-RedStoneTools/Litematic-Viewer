@@ -8,6 +8,9 @@ static LogSource gLog("Litematic");
 #include <cstdint>
 #include <fstream>
 
+// 最大允许读取的文件大小（512 MB）
+static constexpr std::streamoff kMaxFileSize = 512LL * 1024 * 1024;
+
 // NBT解析库
 #include "NBT_All.hpp"
 
@@ -21,6 +24,12 @@ static bool ReadFileBytes(const std::string &filePath, std::vector<uint8_t> &out
         return false;
     }
     auto size = file.tellg();
+    if (size < 0 || size > kMaxFileSize)
+    {
+        gLog.Error("文件过大或无效: %s (%lld 字节, 上限 %lld)", filePath.c_str(),
+            static_cast<long long>(size), static_cast<long long>(kMaxFileSize));
+        return false;
+    }
     file.seekg(0, std::ios::beg);
     out.resize(static_cast<size_t>(size));
     file.read(reinterpret_cast<char *>(out.data()), size);

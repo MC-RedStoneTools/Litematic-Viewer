@@ -27,6 +27,12 @@ public:
     // 设置目标点（通常是模型中心）
     void SetTarget(float x, float y, float z) { m_TargetX = x; m_TargetY = y; m_TargetZ = z; }
 
+    // 获取目标点
+    void GetTarget(float &x, float &y, float &z) const { x = m_TargetX; y = m_TargetY; z = m_TargetZ; }
+
+    // 获取相机位置
+    void GetPosition(float &x, float &y, float &z) const { CalcEyePosition(x, y, z); }
+
     // 调试：打印相机信息
     void PrintDebugInfo() const;
 

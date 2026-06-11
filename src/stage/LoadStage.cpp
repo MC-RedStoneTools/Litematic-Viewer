@@ -2,6 +2,7 @@
 #include "../pipeline/Pipeline.h"
 #include "../utils/Log.h"
 #include "../data/loader/LitematicLoader.h"
+#include "../data/loader/TestData.h"
 #include "../data/block_size/parsers/BlockSizeParser.h"
 #include "../data/block_size/resolvers/ModelInheritanceResolver.h"
 
@@ -29,7 +30,12 @@ static std::vector<std::string> ExtractBlockNames(const std::vector<RegionData> 
 
 static bool ProcessLoad(PipelineContext &ctx)
 {
-    if (!ctx.filePath.empty())
+    if (ctx.useHardcoded)
+    {
+        LoadHardcodedTestData(ctx.regions);
+        gLog.Info("使用硬编码测试数据");
+    }
+    else if (!ctx.filePath.empty())
     {
         if (!LoadLitematic(ctx.filePath, ctx.regions))
         {
@@ -85,7 +91,10 @@ static bool ProcessLoad(PipelineContext &ctx)
         {
             for (size_t i = 0; i < rd.blocks.size(); i++)
             {
-                auto &block = rd.palette[rd.blocks[i]];
+                uint16_t paletteIdx = rd.blocks[i];
+                if (paletteIdx >= rd.palette.size())
+                    continue;
+                auto &block = rd.palette[paletteIdx];
                 if (block.name != "minecraft:air" &&
                     block.name != "minecraft:cave_air" &&
                     block.name != "minecraft:void_air")

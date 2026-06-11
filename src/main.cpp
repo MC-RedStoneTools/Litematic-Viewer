@@ -1,10 +1,14 @@
 #include <string>
+#include <memory>
 
 #include "pipeline/Pipeline.h"
 #include "stage/LoadStage.h"
 #include "stage/MeshStage.h"
+#include "stage/ShaderPackStage.h"
 #include "app/App.h"
 #include "render/platform/RenderLoop.h"
+#include "render/platform/GlfwPlatform.h"
+#include "utils/PathUtils.h"
 
 int main(int argc, char *argv[])
 {
@@ -25,24 +29,31 @@ int main(int argc, char *argv[])
             ctx.filePath = arg;
     }
 
-    // 设置资源目录路径（相对于exe: build_mingw/bin/ -> 项目根/assets/）
-    std::string exeDir = std::string(argv[0]).substr(0, std::string(argv[0]).find_last_of("\\/") + 1);
-    ctx.modelsDir = exeDir + "..\\..\\assets\\models\\block";
-    ctx.texturesDir = exeDir + "..\\..\\assets\\textures\\block";
-    ctx.blockstatesDir = exeDir + "..\\..\\assets\\models\\blockstates";
+    // 资源目录（CMake 构建时复制到 exe 同级的 assets/）
+    std::string exeDir = PathUtils::GetExeDir(argv[0]);
+    ctx.modelsDir = PathUtils::Join(exeDir, {"assets", "models", "block"});
+    ctx.texturesDir = PathUtils::Join(exeDir, {"assets", "textures", "block"});
+    ctx.blockstatesDir = PathUtils::Join(exeDir, {"assets", "models", "blockstates"});
 
     // 加载配置文件
     ctx.appConfig = LoadConfig(exeDir);
+
+    // 设置光影包路径（如果启用）
+    if (ctx.appConfig.shaderPack.enabled && !ctx.appConfig.shaderPack.path.empty())
+    {
+        ctx.shaderPackPath = PathUtils::Join(exeDir, {ctx.appConfig.shaderPack.path.c_str()});
+    }
 
     Log("模式: %s", ctx.useNoCull ? "无剔除" : "带剔除");
 
     // === 注册阶段实现 ===
     RegisterLoadStage();
     RegisterMeshStage();
+    RegisterShaderPackStage();
 
     // === 运行数据处理流水线 ===
     Pipeline pipeline;
-    pipeline.SetFlow({StageType::Load, StageType::MeshBuild});
+    pipeline.SetFlow({StageType::Load, StageType::MeshBuild, StageType::ShaderPack});
 
     if (!pipeline.Run(ctx))
     {
@@ -56,8 +67,9 @@ int main(int argc, char *argv[])
     }
 
     // === 初始化应用程序 ===
+    auto platform = std::make_unique<GlfwPlatform>();
     App app;
-    if (!app.Init(ctx, debugMode))
+    if (!app.Init(std::move(platform), ctx, debugMode))
     {
         LogError("应用程序初始化失败");
         return 1;
@@ -65,7 +77,7 @@ int main(int argc, char *argv[])
 
     // === 运行渲染循环 ===
     RenderLoop loop;
-    int result = loop.Run(app);
+    int result = loop.Run(app.GetPlatform(), app);
 
     // === 清理资源 ===
     app.Shutdown();

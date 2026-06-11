@@ -22,6 +22,9 @@ struct ModelSize
     int totalBlocks = 0;  // 总方块数
 };
 
+// 光影包运行时前向声明
+class ShaderPackRuntime;
+
 // 流程上下文：在各阶段之间传递数据
 struct PipelineContext
 {
@@ -33,6 +36,12 @@ struct PipelineContext
     bool useHardcoded = false;      // 使用硬编码测试数据
     bool useNoCull = false;         // 无剔除模式
     AppConfig appConfig;            // 应用配置
+
+    // 光影包相关（新增）
+    std::string shaderPackPath;              // 光影包路径（空表示不使用）
+    ShaderPackRuntime *shaderPackRuntime = nullptr;  // 光影包运行时
+    int screenWidth = 0;                     // 屏幕宽度
+    int screenHeight = 0;                    // 屏幕高度
 
     // 阶段输出
     std::vector<RegionData> regions;
@@ -47,6 +56,7 @@ enum class StageType
 {
     Load,       // 加载+解码：文件 → RegionData
     MeshBuild,  // 网格生成：RegionData → MeshData
+    ShaderPack, // 光影包加载（新增）
     Count       // 阶段总数（哨兵值）
 };
 
