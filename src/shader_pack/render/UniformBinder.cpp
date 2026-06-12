@@ -16,12 +16,20 @@ GLint UniformBinder::GetLocation(GLuint program, const char *name)
     return loc;
 }
 
-// 绑定矩阵 uniform
+// 绑定 4x4 矩阵 uniform
 void UniformBinder::BindMatrix(GLuint program, const char *name, const float *matrix)
 {
     GLint loc = GetLocation(program, name);
     if (loc >= 0)
         glUniformMatrix4fv(loc, 1, GL_FALSE, matrix);
+}
+
+// 绑定 3x3 矩阵 uniform（用于法线矩阵 mat3）
+void UniformBinder::BindMatrix3(GLuint program, const char *name, const float *matrix)
+{
+    GLint loc = GetLocation(program, name);
+    if (loc >= 0)
+        glUniformMatrix3fv(loc, 1, GL_FALSE, matrix);
 }
 
 // 绑定 vec3 uniform
@@ -124,30 +132,19 @@ void UniformBinder::BindMatrixUniforms(GLuint program, const Camera &camera)
     InvertMatrix4x4(proj, projInv);
     BindMatrix(program, "gbufferProjectionInverse", projInv);
 
+    // 【第一步】添加内置渲染的 uniform 名称
+    // 内置渲染使用 model, view, projection
+    float model[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}; // 单位矩阵
+    BindMatrix(program, "model", model);
+    BindMatrix(program, "view", view);
+    BindMatrix(program, "projection", proj);
+
     // compatibility 模式内置矩阵：gl_ModelViewMatrix 和 gl_ProjectionMatrix
     // 这些是着色器中使用的内置矩阵，必须手动设置
     // 注意：由于 glGetUniformLocation 无法获取内置 uniform，我们在着色器源码中
     // 将它们替换为 u_ModelViewMatrix 和 u_ProjectionMatrix
     BindMatrix(program, "u_ModelViewMatrix", view);
     BindMatrix(program, "u_ProjectionMatrix", proj);
-
-    // 诊断：检查 uniform 位置（只输出一次）
-    static bool loggedOnce = false;
-    if (!loggedOnce) {
-        GLint loc;
-        loc = glGetUniformLocation(program, "gbufferModelView");
-        fprintf(stderr, "[DEBUG] Uniform gbufferModelView: %d\n", loc);
-        loc = glGetUniformLocation(program, "gbufferModelViewInverse");
-        fprintf(stderr, "[DEBUG] Uniform gbufferModelViewInverse: %d\n", loc);
-        loc = glGetUniformLocation(program, "u_ModelViewMatrix");
-        fprintf(stderr, "[DEBUG] Uniform u_ModelViewMatrix: %d\n", loc);
-        loc = glGetUniformLocation(program, "u_ProjectionMatrix");
-        fprintf(stderr, "[DEBUG] Uniform u_ProjectionMatrix: %d\n", loc);
-        loc = glGetUniformLocation(program, "gbufferProjection");
-        fprintf(stderr, "[DEBUG] Uniform gbufferProjection: %d\n", loc);
-        fflush(stderr);
-        loggedOnce = true;
-    }
 
     // gl_NormalMatrix = transpose(inverse(gl_ModelViewMatrix))
     // 用于正确变换法线向量
@@ -160,15 +157,46 @@ void UniformBinder::BindMatrixUniforms(GLuint program, const Camera &camera)
         normalMat[2], normalMat[6], normalMat[10], normalMat[14],
         normalMat[3], normalMat[7], normalMat[11], normalMat[15]
     };
-    BindMatrix(program, "u_NormalMatrix", normalMatTransposed);
+    // 使用 mat3 绑定（shader 中声明为 uniform mat3）
+    float normalMat3[9] = {
+        normalMatTransposed[0], normalMatTransposed[1], normalMatTransposed[2],
+        normalMatTransposed[4], normalMatTransposed[5], normalMatTransposed[6],
+        normalMatTransposed[8], normalMatTransposed[9], normalMatTransposed[10]
+    };
+    BindMatrix3(program, "u_NormalMatrix", normalMat3);
 
-    // gl_TextureMatrix[0] 和 gl_TextureMatrix[1]（compatibility 模式纹理坐标变换）
-    // gl_TextureMatrix[0] = 单位矩阵（普通纹理坐标）
+    // 纹理矩阵（core 模式下已替换为 u_TextureMatrix0/1）
+    // 默认单位矩阵（纹理坐标不变换）
     float texMat0[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
-    BindMatrix(program, "gl_TextureMatrix[0]", texMat0);
-    // gl_TextureMatrix[1] = 单位矩阵（光照图坐标，Minecraft 使用 0-15 范围）
+    BindMatrix(program, "u_TextureMatrix0", texMat0);
     float texMat1[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
-    BindMatrix(program, "gl_TextureMatrix[1]", texMat1);
+    BindMatrix(program, "u_TextureMatrix1", texMat1);
+
+    // 投影参数
+    BindFloat(program, "near", 0.1f);
+    BindFloat(program, "far", 1000.0f);
+    BindFloat(program, "aspectRatio", (float)m_ScreenWidth / m_ScreenHeight);
+
+    // 眼睛高度（相机位置 Y）
+    float camX, camY, camZ;
+    camera.GetPosition(camX, camY, camZ);
+    BindFloat(program, "eyeAltitude", camY);
+
+    // 世界时间和帧时间
+    BindInt(program, "worldTime", m_WorldTime);
+    BindInt(program, "worldDay", 1);
+    BindFloat(program, "frameTime", 0.016f);  // 约 60fps
+    BindFloat(program, "frameTimeCounter", m_FrameTimeCounter);
+    BindInt(program, "frameCounter", m_FrameCounter);
+
+    // 其他常用 uniform
+    BindInt(program, "isEyeInWater", 0);
+    BindInt(program, "moonPhase", 0);
+    BindFloat(program, "blindness", 0.0f);
+    BindFloat(program, "nightVision", 0.0f);
+    BindFloat(program, "darknessFactor", 0.0f);
+    BindFloat(program, "darknessLightFactor", 0.0f);
+    BindFloat(program, "maxBlindnessDarkness", 0.0f);
 
     // 阴影矩阵（基于 sunAngle 计算，从太阳方向俯视场景）
     // sunAngle: 0.25=正午(太阳在正上方), 0.0/0.5=日出/日落
@@ -330,4 +358,16 @@ void UniformBinder::BindAll(GLuint program, const Camera &camera, float deltaTim
     float entityColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     loc = GetLocation(program, "entityColor");
     if (loc >= 0) glUniform4fv(loc, 1, entityColor);
+
+    // Fog 参数（替代 gl_Fog 内置结构体）
+    float fogStart = 0.0f;
+    float fogEnd = 1000.0f;
+    float fogScale = 1.0f / (fogEnd - fogStart);
+    BindFloat(program, "u_FogStart", fogStart);
+    BindFloat(program, "u_FogEnd", fogEnd);
+    BindFloat(program, "u_FogScale", fogScale);
+    BindFloat(program, "u_FogDensity", 0.0f);
+    float fogColor[4] = {0.7f, 0.8f, 1.0f, 1.0f}; // 默认天空色
+    loc = GetLocation(program, "u_FogColor");
+    if (loc >= 0) glUniform4fv(loc, 1, fogColor);
 }

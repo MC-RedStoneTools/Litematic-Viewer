@@ -38,6 +38,11 @@ private:
     // 添加 Iris 标准 Uniform 声明（插入到全局作用域）
     static std::string AddIrisUniforms(const std::string &source, bool isVertex);
 
+    // 将 compatibility 模式内置变量转换为 core 模式自定义变量
+    // gl_Vertex→_ia_position, gl_Normal→_ia_normal, gl_Color→_ia_color 等
+    // gl_TextureMatrix[N]→u_TextureMatrixN
+    static std::string ConvertBuiltinToCore(const std::string &source, bool isVertex);
+
     // 规范化路径（统一斜杠、去掉前导 /）
     static std::string NormalizePath(const std::string &path);
 

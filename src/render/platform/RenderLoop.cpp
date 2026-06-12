@@ -25,19 +25,12 @@ int RenderLoop::Run(IPlatform &platform, App &app)
     ShaderPackRenderer shaderPackRenderer;
     bool hasShaderPack = (ctx.shaderPackRuntime != nullptr && ctx.shaderPackRuntime->IsReady());
     bool useShaderPack = hasShaderPack && app.IsShaderPackEnabled();
-    fprintf(stderr, "[DEBUG] RenderLoop: hasShaderPack=%d, useShaderPack=%d\n",
-            hasShaderPack, useShaderPack);
-    fflush(stderr);
 
     if (useShaderPack)
     {
         int fbWidth, fbHeight;
         platform.GetFramebufferSize(fbWidth, fbHeight);
-        fprintf(stderr, "[DEBUG] RenderLoop: 调用 InitShaderPackVAO 前\n");
-        fflush(stderr);
         renderer.InitShaderPackVAO(); // 创建兼容 compatibility 模式的 VAO
-        fprintf(stderr, "[DEBUG] RenderLoop: 调用 InitShaderPackVAO 后\n");
-        fflush(stderr);
         shaderPackRenderer.Init(*ctx.shaderPackRuntime, fbWidth, fbHeight);
         gLog.Info("光影包渲染模式已启用");
     }
@@ -56,24 +49,12 @@ int RenderLoop::Run(IPlatform &platform, App &app)
         // 动态检查是否使用光影包（支持运行时切换）
         bool currentUseShaderPack = hasShaderPack && app.IsShaderPackEnabled();
 
-        // 调试输出（每60帧输出一次）
-        static int frameCount = 0;
-        frameCount++;
-        if (frameCount % 60 == 1) {
-            fprintf(stderr, "[DEBUG] Frame %d: currentUseShaderPack=%d, enableShadow=%d, meshEmpty=%d\n",
-                    frameCount, currentUseShaderPack, app.IsShadowEnabled(), ctx.mesh.IsEmpty());
-            fflush(stderr);
-        }
-
         if (currentUseShaderPack)
         {
-            // 渲染光影包之前，先清空主屏幕（防止某些 Pass 未覆盖全屏导致黑屏或重影）
             platform.Clear(0.0f, 0.0f, 0.0f);
-
             shaderPackRenderer.SetScreenSize(width, height);
-            float dt = static_cast<float>(platform.GetTime() - lastTime);
-            lastTime = platform.GetTime();
-            shaderPackRenderer.Render(*ctx.shaderPackRuntime, camera, ctx.mesh, texMgr, renderer, dt);
+            // 使用部分渲染模式：只用 gbuffers_terrain，跳过 composite
+            shaderPackRenderer.RenderPartial(*ctx.shaderPackRuntime, camera, ctx.mesh, texMgr, renderer);
         }
         else
         {

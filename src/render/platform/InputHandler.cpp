@@ -88,23 +88,13 @@ void InputHandler::HandleKeyboard(IPlatform &platform, App &app)
         s_Key0Pressed = true;
     } else s_Key0Pressed = false;
 
-    // F 键切换阴影（边沿检测）
+    // F 键切换光影包（边沿检测）
     if (platform.IsKeyDown(IPlatform::KEY_F)) {
         if (!s_KeyFPressed) {
-            bool newState = !app.IsShadowEnabled();
-            app.SetShadowEnabled(newState);
-            gLog.Info("阴影: %s", newState ? "开启" : "关闭");
-        }
-        s_KeyFPressed = true;
-    } else s_KeyFPressed = false;
-
-    // G 键切换光影包（边沿检测）
-    if (platform.IsKeyDown(IPlatform::KEY_G)) {
-        if (!s_KeyGPressed) {
             bool newState = !app.IsShaderPackEnabled();
             app.SetShaderPackEnabled(newState);
             gLog.Info("光影包: %s", newState ? "开启" : "关闭");
         }
-        s_KeyGPressed = true;
-    } else s_KeyGPressed = false;
+        s_KeyFPressed = true;
+    } else s_KeyFPressed = false;
 }

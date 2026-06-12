@@ -50,7 +50,7 @@ private:
     ShadowMap m_ShadowMap;
     int m_DebugMode = 0;
     bool m_EnableShadow = false; // 默认关闭，按 F 开启
-    bool m_EnableShaderPack = false; // 默认关闭，按 G 开启
+    bool m_EnableShaderPack = true; // 默认开启，按 G 关闭
     const PipelineContext *m_Ctx = nullptr;
 
     // 计算所有Region的包围盒中心

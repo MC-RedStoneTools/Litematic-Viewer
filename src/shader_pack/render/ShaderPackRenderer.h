@@ -24,6 +24,13 @@ public:
                 const Renderer &renderer,
                 float deltaTime);
 
+    // 部分渲染：只用 gbuffers_terrain，跳过 composite，直接 blit 到屏幕
+    void RenderPartial(ShaderPackRuntime &runtime,
+                       const Camera &camera,
+                       const MeshData &mesh,
+                       const TextureManager &texMgr,
+                       const Renderer &renderer);
+
     // 更新屏幕尺寸（窗口 resize 时调用）
     void SetScreenSize(int width, int height) { m_ScreenWidth = width; m_ScreenHeight = height; }
 

@@ -16,6 +16,7 @@ public:
 
     // 单独绑定
     void BindMatrix(GLuint program, const char *name, const float *matrix);
+    void BindMatrix3(GLuint program, const char *name, const float *matrix);
     void BindVector3(GLuint program, const char *name, float x, float y, float z);
     void BindFloat(GLuint program, const char *name, float value);
     void BindInt(GLuint program, const char *name, int value);

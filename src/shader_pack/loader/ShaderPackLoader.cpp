@@ -290,7 +290,7 @@ void ShaderPackLoader::BuildFileMap(void *zipHandle, FileMap &outMap)
         std::transform(name.begin(), name.end(), name.begin(), ::tolower);
 
         bool isTextFile = false;
-        const char *exts[] = {".glsl", ".vsh", ".fsh", ".properties", ".cfg", ".h"};
+        const char *exts[] = {".glsl", ".vsh", ".fsh", ".properties", ".cfg", ".h", ".settings", ".txt"};
         for (const char *ext : exts)
         {
             if (name.size() >= strlen(ext) &&
@@ -570,6 +570,55 @@ bool ShaderPackLoader::LoadFromDirectory(const std::string &dirPath, ShaderPackD
         }
     }
 
+    // 【关键】构建文件映射表，用于 #include 解析
+    FileMap fileMap;
+    for (auto &entry : fs::recursive_directory_iterator(shadersDir))
+    {
+        if (!entry.is_regular_file())
+            continue;
+
+        // 只加载文本文件
+        std::string name = entry.path().filename().string();
+        std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+
+        bool isTextFile = false;
+        const char *exts[] = {".glsl", ".vsh", ".fsh", ".properties", ".cfg", ".h", ".settings", ".txt"};
+        for (const char *ext : exts)
+        {
+            if (name.size() >= strlen(ext) &&
+                name.substr(name.size() - strlen(ext)) == ext)
+            {
+                isTextFile = true;
+                break;
+            }
+        }
+        if (!isTextFile)
+            continue;
+
+        std::ifstream file(entry.path(), std::ios::binary);
+        if (!file.is_open())
+            continue;
+
+        std::string content((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>());
+
+        // 存储相对路径（shaders/xxx 格式）
+        fs::path relative = fs::relative(entry.path(), shadersDir);
+        std::string relStr = relative.generic_string();
+        std::string fullPath = "shaders/" + relStr;
+
+        fileMap[fullPath] = content;
+
+        // 同时存储不带 shaders/ 前缀的路径
+        std::string withoutPrefix = relStr;
+        if (fileMap.find(withoutPrefix) == fileMap.end())
+            fileMap[withoutPrefix] = content;
+    }
+
+    // 保存文件映射表到 ShaderPackData（供运行时使用）
+    out.fileMap = fileMap;
+    log.Info("文件映射表构建完成: %zu 个文本文件", fileMap.size());
+
     // 遍历目录中的着色器文件
     for (auto &entry : fs::recursive_directory_iterator(shadersDir))
     {
@@ -595,6 +644,9 @@ bool ShaderPackLoader::LoadFromDirectory(const std::string &dirPath, ShaderPackD
 
         std::string source((std::istreambuf_iterator<char>(file)),
                             std::istreambuf_iterator<char>());
+
+        // 【关键】解析 #include 指令
+        source = ResolveIncludes(source, fileMap);
 
         auto &pass = out.passes[passName];
         if (isVertex)

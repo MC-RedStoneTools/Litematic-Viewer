@@ -25,8 +25,26 @@ int main(int argc, char *argv[])
             ctx.useNoCull = true;
         else if (arg == "--debug" || arg == "-d")
             debugMode = 1;
-        else
-            ctx.filePath = arg;
+        else if (arg == "--shaderpack" || arg == "-s")
+        {
+            if (i + 1 < argc)
+            {
+                ctx.shaderPackPath = argv[++i];
+                ctx.appConfig.shaderPack.enabled = true;
+            }
+        }
+        else if (arg == "--litematica" || arg == "-l")
+        {
+            if (i + 1 < argc)
+                ctx.filePath = argv[++i];
+        }
+        else if (arg == "--textures")
+        {
+            if (i + 1 < argc)
+                ctx.texturesDir = argv[++i];
+        }
+        else if (arg[0] != '-')
+            ctx.filePath = arg;  // 兼容旧格式：直接传文件名
     }
 
     // 资源目录（CMake 构建时复制到 exe 同级的 assets/）
@@ -38,8 +56,8 @@ int main(int argc, char *argv[])
     // 加载配置文件
     ctx.appConfig = LoadConfig(exeDir);
 
-    // 设置光影包路径（如果启用）
-    if (ctx.appConfig.shaderPack.enabled && !ctx.appConfig.shaderPack.path.empty())
+    // 设置光影包路径（如果启用），命令行参数优先
+    if (ctx.appConfig.shaderPack.enabled && !ctx.appConfig.shaderPack.path.empty() && ctx.shaderPackPath.empty())
     {
         ctx.shaderPackPath = PathUtils::Join(exeDir, {ctx.appConfig.shaderPack.path.c_str()});
     }

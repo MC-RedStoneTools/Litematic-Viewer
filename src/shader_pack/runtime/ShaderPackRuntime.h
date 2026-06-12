@@ -16,10 +16,12 @@ struct CompiledPass
 struct FrameBufferObject
 {
     unsigned int fbo = 0;           // FBO ID (GLuint)
-    unsigned int colorTexture = 0;  // 颜色附件 (GLuint)
+    unsigned int colorTexture = 0;  // 颜色附件 0 (GLuint)
+    unsigned int colorTexture2 = 0; // 颜色附件 1 (MRT, GLuint)
     unsigned int depthTexture = 0;  // 深度附件 (GLuint)
     int width = 0;
     int height = 0;
+    int numColorAttachments = 1;    // 颜色附件数量
 };
 
 // 光影包运行时：管理编译后的着色器和 FBO
@@ -76,9 +78,9 @@ private:
     // 编译单个着色器 Pass
     bool CompilePass(const std::string &name, const ShaderPassSource &source);
 
-    // 创建 FBO
+    // 创建 FBO（numColorAttachments: 颜色附件数量，支持 MRT）
     bool CreateFBO(const std::string &name, int width, int height,
-                   bool hasColor, bool hasDepth);
+                   bool hasColor, bool hasDepth, int numColorAttachments = 1);
 
     // 创建默认 FBO（Shadow、GBuffer、Composite）
     void CreateDefaultFBOs(int screenWidth, int screenHeight);

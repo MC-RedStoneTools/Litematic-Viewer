@@ -79,6 +79,10 @@ std::string ShaderPreprocessor::Process(const std::string &source, bool isVertex
     // 7. 添加版本声明（必须最后处理，放在最前面）
     result = AddVersionHeader(result);
 
+    // 8. 将 compatibility 内置变量转换为 core 模式自定义变量
+    // gl_Vertex→_ia_position, gl_TextureMatrix→u_TextureMatrix 等
+    result = ConvertBuiltinToCore(result, isVertex);
+
     return result;
 }
 
@@ -223,19 +227,19 @@ size_t ShaderPreprocessor::FindGlobalInsertPoint(const std::string &source)
 }
 
 // 添加 #version 330 声明
+// 使用 core profile 以确保最大兼容性，内置变量通过 ConvertBuiltinToCore 替换
 std::string ShaderPreprocessor::AddVersionHeader(const std::string &source)
 {
     static const std::regex versionRegex(R"(#version\s+\d+[^\n]*\n?)");
     // 检查是否已有版本声明
     if (source.find("#version") != std::string::npos)
     {
-        // 替换现有版本声明
-        // 使用 330 compatibility 以支持现代 layout(location) 和旧版内置变量
-        return std::regex_replace(source, versionRegex, "#version 330 compatibility\n");
+        // 替换现有版本声明为 330 core
+        return std::regex_replace(source, versionRegex, "#version 330 core\n");
     }
 
     // 在最前面添加版本声明
-    return "#version 330 compatibility\n" + source;
+    return "#version 330 core\n" + source;
 }
 
 // 替换关键字：attribute → in, varying → out/in
@@ -298,43 +302,89 @@ std::string ShaderPreprocessor::ReplaceTextureFunctions(const std::string &sourc
     // shadow2DLod → textureLod（Iris 光影包使用）
     result = std::regex_replace(result, re_shadow2DLod, "textureLod(");
 
+    // "texture" 是 GLSL 330 内置函数名，将 uniform sampler2D texture 重命名为 gtexture
+    // 避免 glGetUniformLocation("texture") 在某些驱动上返回 -1
+    // 只替换 uniform 声明中的 texture 和作为变量使用的 texture（非函数调用 texture(）
+    {
+        // 替换 uniform 声明：uniform sampler2D texture → uniform sampler2D gtexture
+        static const std::regex re_sampler_decl(R"(\buniform\s+sampler(\w*)\s+texture\b)");
+        result = std::regex_replace(result, re_sampler_decl, "uniform sampler$1 gtexture");
+        // 替换变量引用：独立的 texture（非函数调用 texture(）→ gtexture
+        // 使用负向前瞻排除 texture(（函数调用）
+        static const std::regex re_texture_var(R"(\btexture\b(?!\s*\())");
+        result = std::regex_replace(result, re_texture_var, "gtexture");
+    }
+
+    // texture2DGradARB → textureGrad（ARB 扩展函数，GLSL 330 内置）
+    static const std::regex re_texture2DGradARB(R"(\btexture2DGradARB\b)");
+    result = std::regex_replace(result, re_texture2DGradARB, "textureGrad");
+
+    // 【关键】uniform sampler2D texture; 中的 texture 与 GLSL 内置函数 texture() 冲突
+    // 重命名为 gtexture
+    {
+        static const std::regex re_samplerTexture(R"(\buniform\s+sampler2D\s+texture\s*;)");
+        result = std::regex_replace(result, re_samplerTexture, "uniform sampler2D gtexture;");
+        // 替换 texture(texture, → texture(gtexture,
+        static const std::regex re_textureCall(R"(texture\s*\(\s*texture\s*,)");
+        result = std::regex_replace(result, re_textureCall, "texture(gtexture,");
+        // 替换 texture2DGradARB(texture, → textureGrad(gtexture,
+        static const std::regex re_gradCall(R"(textureGrad\s*\(\s*texture\s*,)");
+        result = std::regex_replace(result, re_gradCall, "textureGrad(gtexture,");
+    }
+
     return result;
 }
 
-// 替换片段输出：gl_FragData[N] → out 变量
+// 替换片段输出：gl_FragData[N] / gl_FragColor → out 变量
 std::string ShaderPreprocessor::ReplaceFragDataOutput(const std::string &source)
 {
     static const std::regex re_fragData0(R"(gl_FragData\s*\[\s*0\s*\])");
+    static const std::regex re_fragColor(R"(\bgl_FragColor\b)");
 
     std::string result = source;
 
-    // 检查是否使用 gl_FragData
-    if (result.find("gl_FragData") == std::string::npos)
+    bool hasFragData = result.find("gl_FragData") != std::string::npos;
+    bool hasFragColor = std::regex_search(result, re_fragColor);
+
+    if (!hasFragData && !hasFragColor)
         return result;
 
-    // 添加输出变量声明（在全局作用域插入点之后）
-    std::string outputDecl = "\nlayout(location = 0) out vec4 fragColor;\n";
+    // 【第一步】检测是否已有输出变量声明
+    // 如果已有 layout(location = 0) out 或 out vec4，说明是 GLSL 330 格式，不需要注入
+    bool hasOutputDecl = result.find("layout(location = 0) out") != std::string::npos ||
+                         result.find("layout (location = 0) out") != std::string::npos ||
+                         result.find("out vec4 FragColor") != std::string::npos ||
+                         result.find("out vec4 fragColor") != std::string::npos;
 
-    // 替换 gl_FragData[0] 为 fragColor
-    result = std::regex_replace(result, re_fragData0, "fragColor");
-
-    // 处理其他 MRT 输出（如果有的话）
-    for (int i = 1; i < 8; i++)
+    if (!hasOutputDecl)
     {
-        std::string pattern = "gl_FragData\\[\\s*" + std::to_string(i) + "\\s*\\]";
-        std::string replacement = "fragColor" + std::to_string(i);
+        // 添加输出变量声明
+        std::string outputDecl = "\nlayout(location = 0) out vec4 fragColor;\n";
 
-        if (std::regex_search(result, std::regex(pattern)))
+        // 替换 gl_FragColor → fragColor
+        if (hasFragColor)
+            result = std::regex_replace(result, re_fragColor, "fragColor");
+
+        // 替换 gl_FragData[0] → fragColor
+        result = std::regex_replace(result, re_fragData0, "fragColor");
+
+        // 处理其他 MRT 输出
+        for (int i = 1; i < 8; i++)
         {
-            // 添加对应的输出声明
-            outputDecl += "layout(location = " + std::to_string(i) + ") out vec4 " + replacement + ";\n";
-            result = std::regex_replace(result, std::regex(pattern), replacement);
-        }
-    }
+            std::string pattern = "gl_FragData\\[\\s*" + std::to_string(i) + "\\s*\\]";
+            std::string replacement = "fragColor" + std::to_string(i);
 
-    // 在全局作用域插入点之后插入输出声明
-    size_t insertPos = FindGlobalInsertPoint(result);
-    result.insert(insertPos, outputDecl);
+            if (std::regex_search(result, std::regex(pattern)))
+            {
+                outputDecl += "layout(location = " + std::to_string(i) + ") out vec4 " + replacement + ";\n";
+                result = std::regex_replace(result, std::regex(pattern), replacement);
+            }
+        }
+
+        // 在全局作用域插入点之后插入输出声明
+        size_t insertPos = FindGlobalInsertPoint(result);
+        result.insert(insertPos, outputDecl);
+    }
 
     return result;
 }
@@ -403,52 +453,65 @@ std::string ShaderPreprocessor::AddCustomDefines(const std::string &source, bool
 std::string ShaderPreprocessor::AddIrisUniforms(const std::string &source, bool isVertex)
 {
     // 辅助 lambda：精确检查源码中是否已有 uniform 声明（格式：uniform TYPE name）
+    // 同时检查 const 声明和普通变量声明，避免冲突
     auto hasUniform = [&](const std::string &type, const std::string &name) -> bool {
-        return source.find("uniform " + type + " " + name) != std::string::npos;
+        // 检查 uniform 声明
+        if (source.find("uniform " + type + " " + name) != std::string::npos)
+            return true;
+        // 检查 const 声明（如 const float shadowDistance = 70.0;）
+        if (source.find("const " + type + " " + name) != std::string::npos)
+            return true;
+        // 检查普通变量声明（如 vec2 texelSize = vec2(...);）
+        if (source.find(type + " " + name + " ") != std::string::npos ||
+            source.find(type + " " + name + "=") != std::string::npos ||
+            source.find(type + " " + name + ";") != std::string::npos)
+            return true;
+        return false;
     };
 
     std::string injected;
 
-    // ---- 矩阵 Uniform（如果源码中已有则跳过，避免冲突）----
-    if (!hasUniform("mat4", "gbufferModelView"))
-    {
-        injected += "// Iris 矩阵 Uniform\n";
-        injected += "uniform mat4 gbufferModelView;\n";
-        injected += "uniform mat4 gbufferModelViewInverse;\n";
-        injected += "uniform mat4 gbufferProjection;\n";
-        injected += "uniform mat4 gbufferProjectionInverse;\n";
-        injected += "uniform mat4 gbufferPreviousModelView;\n";
-        injected += "uniform mat4 gbufferPreviousProjection;\n";
-        injected += "uniform mat4 shadowModelView;\n";
-        injected += "uniform mat4 shadowModelViewInverse;\n";
-        injected += "uniform mat4 shadowProjection;\n";
-        injected += "uniform mat4 shadowProjectionInverse;\n";
-    }
+    // ---- 辅助 lambda：逐个检查并注入 uniform（避免批量注入导致冲突）----
+    auto injectIfMissing = [&](const std::string &type, const std::string &name) {
+        if (!hasUniform(type, name))
+            injected += "uniform " + type + " " + name + ";\n";
+    };
 
-    // ---- 参数 Uniform（仅在源码中没有对应声明时注入）----
-    if (!hasUniform("float", "frameTimeCounter"))
-    {
-        injected += "uniform float frameTimeCounter;\n";
-        injected += "uniform float frameTime;\n";
-        injected += "uniform int frameCounter;\n";
-        injected += "uniform int worldTime;\n";
-        injected += "uniform int moonPhase;\n";
-        injected += "uniform vec3 cameraPosition;\n";
-        injected += "uniform vec3 previousCameraPosition;\n";
-        injected += "uniform float viewWidth;\n";
-        injected += "uniform float viewHeight;\n";
-        injected += "uniform float aspectRatio;\n";
-        injected += "uniform float near;\n";
-        injected += "uniform float far;\n";
-        injected += "uniform float shadowDistance;\n";
-        injected += "uniform int shadowMapResolution;\n";
-        injected += "uniform int renderStage;\n";
-        injected += "uniform vec2 texelSize;\n";
-        injected += "uniform int entityId;\n";
-        injected += "uniform vec4 entityColor;\n";
-        injected += "uniform vec3 cameraPositionFract;\n";
-        injected += "uniform vec3 cameraPositionBestFract;\n";
-    }
+    // ---- 矩阵 Uniform（逐个检查，避免跳过整个块）----
+    injected += "// Iris 矩阵 Uniform\n";
+    injectIfMissing("mat4", "gbufferModelView");
+    injectIfMissing("mat4", "gbufferModelViewInverse");
+    injectIfMissing("mat4", "gbufferProjection");
+    injectIfMissing("mat4", "gbufferProjectionInverse");
+    injectIfMissing("mat4", "gbufferPreviousModelView");
+    injectIfMissing("mat4", "gbufferPreviousProjection");
+    injectIfMissing("mat4", "shadowModelView");
+    injectIfMissing("mat4", "shadowModelViewInverse");
+    injectIfMissing("mat4", "shadowProjection");
+    injectIfMissing("mat4", "shadowProjectionInverse");
+
+    // ---- 参数 Uniform（逐个检查注入）----
+    injected += "// Iris 参数 Uniform\n";
+    injectIfMissing("float", "frameTimeCounter");
+    injectIfMissing("float", "frameTime");
+    injectIfMissing("int", "frameCounter");
+    injectIfMissing("int", "worldTime");
+    injectIfMissing("int", "moonPhase");
+    injectIfMissing("vec3", "cameraPosition");
+    injectIfMissing("vec3", "previousCameraPosition");
+    injectIfMissing("float", "viewWidth");
+    injectIfMissing("float", "viewHeight");
+    injectIfMissing("float", "aspectRatio");
+    injectIfMissing("float", "near");
+    injectIfMissing("float", "far");
+    injectIfMissing("float", "shadowDistance");
+    injectIfMissing("int", "shadowMapResolution");
+    injectIfMissing("int", "renderStage");
+    injectIfMissing("vec2", "texelSize");
+    injectIfMissing("int", "entityId");
+    injectIfMissing("vec4", "entityColor");
+    injectIfMissing("vec3", "cameraPositionFract");
+    injectIfMissing("vec3", "cameraPositionBestFract");
 
     // dhMaterialId 独立检查（Distant Horizons 模块需要，不能放在上面的批量检查中）
     if (!hasUniform("int", "dhMaterialId"))
@@ -519,8 +582,13 @@ std::string ShaderPreprocessor::AddIrisUniforms(const std::string &source, bool 
         source.find("vec2 midTexCoord") == std::string::npos &&
         source.find("vec2 mc_midTexCoord") == std::string::npos)
         injected += varyingPrefix + "vec2 texCoord;\n";
-    if (source.find("vec3 normal") == std::string::npos &&
-        source.find("vec3 vaNormal") == std::string::npos)
+    // 【关键】检查任何类型的 normal 声明（vec3/vec4），避免类型冲突
+    if (source.find("normal") == std::string::npos ||
+        (source.find("vec3 normal") == std::string::npos &&
+         source.find("vec4 normal") == std::string::npos &&
+         source.find("varying") == std::string::npos &&
+         source.find("out ") == std::string::npos &&
+         source.find("in ") == std::string::npos))
         injected += varyingPrefix + "vec3 normal;\n";
 
     // ---- Iris 属性声明（顶点着色器输入）----
@@ -596,5 +664,186 @@ vec4 clamp01(vec4 x) { return clamp(x, 0.0, 1.0); }
     size_t insertPos = FindGlobalInsertPoint(source);
     std::string result = source;
     result.insert(insertPos, injected);
+    return result;
+}
+
+// ============================================================
+// ConvertBuiltinToCore：将 compatibility 模式内置变量转换为 core 模式
+// 核心问题：GLSL 330 compatibility 内置变量（gl_Vertex, gl_Color 等）
+// 在某些驱动上无法正确从 VAO 读取数据，需要替换为 layout(location=N) in 变量
+// ============================================================
+std::string ShaderPreprocessor::ConvertBuiltinToCore(const std::string &source, bool isVertex)
+{
+    std::string result = source;
+
+    // ---- 1. 替换 gl_TextureMatrix[N] → u_TextureMatrixN（顶点和片段着色器都需要）----
+    {
+        static const std::regex re_texMat(R"(\bgl_TextureMatrix\s*\[\s*(\d+)\s*\])");
+        result = std::regex_replace(result, re_texMat, "u_TextureMatrix$1");
+    }
+
+    // ---- 2. 替换 ftransform() → (u_ProjectionMatrix * u_ModelViewMatrix * _ia_position) ----
+    // ftransform() 在 GLSL 140 后被移除，等价于 gl_ModelViewProjectionMatrix * gl_Vertex
+    {
+        static const std::regex re_ftransform(R"(\bftransform\s*\(\s*\))");
+        result = std::regex_replace(result, re_ftransform,
+            "(u_ProjectionMatrix * u_ModelViewMatrix * _ia_position)");
+    }
+
+    // ---- 2.1 替换 compatibility 内置矩阵为自定义 uniform ----
+    // gl_ModelViewProjectionMatrix → (u_ProjectionMatrix * u_ModelViewMatrix)
+    {
+        static const std::regex re_mvp(R"(\bgl_ModelViewProjectionMatrix\b)");
+        result = std::regex_replace(result, re_mvp, "(u_ProjectionMatrix * u_ModelViewMatrix)");
+    }
+    // gl_ModelViewMatrix → u_ModelViewMatrix
+    {
+        static const std::regex re_mv(R"(\bgl_ModelViewMatrix\b)");
+        result = std::regex_replace(result, re_mv, "u_ModelViewMatrix");
+    }
+    // gl_ProjectionMatrix → u_ProjectionMatrix
+    {
+        static const std::regex re_proj(R"(\bgl_ProjectionMatrix\b)");
+        result = std::regex_replace(result, re_proj, "u_ProjectionMatrix");
+    }
+    // gl_NormalMatrix → u_NormalMatrix
+    {
+        static const std::regex re_normalMat(R"(\bgl_NormalMatrix\b)");
+        result = std::regex_replace(result, re_normalMat, "u_NormalMatrix");
+    }
+
+    // ---- 2.2 替换 shadow2D → texture（GLSL 140 后移除的阴影采样函数）----
+    // shadow2D 返回 vec4（compatibility），但 texture(sampler2DShadow) 返回 float（core）
+    // 需要先处理 shadow2D(...).x → texture(...)，再处理无 swizzle 的情况
+    {
+        // 先替换带 .x/.r swizzle 的 shadow2D 调用（shadow2D 返回 vec4 但 core texture 返回 float）
+        static const std::regex re_shadow2D_swizzle(R"(\bshadow2D\s*\(\s*(shadowtex\d+)\s*,\s*(vec3\s*\([^)]+\))\s*\)\s*\.[xrgba]+)");
+        result = std::regex_replace(result, re_shadow2D_swizzle, "texture($1, $2)");
+        // 再替换不带 swizzle 的 shadow2D 调用
+        static const std::regex re_shadow2D(R"(\bshadow2D\s*\()");
+        result = std::regex_replace(result, re_shadow2D, "texture(");
+    }
+    // shadow2DProj → textureProj
+    {
+        static const std::regex re_shadow2DProj(R"(\bshadow2DProj\s*\()");
+        result = std::regex_replace(result, re_shadow2DProj, "textureProj(");
+    }
+
+    // ---- 2.3 替换 gl_Fog 结构体成员为自定义 uniform ----
+    // gl_Fog.start → u_FogStart, gl_Fog.end → u_FogEnd, gl_Fog.scale → u_FogScale
+    // gl_Fog.density → u_FogDensity, gl_Fog.color → u_FogColor
+    {
+        static const std::regex re_fogStart(R"(\bgl_Fog\.start\b)");
+        result = std::regex_replace(result, re_fogStart, "u_FogStart");
+        static const std::regex re_fogEnd(R"(\bgl_Fog\.end\b)");
+        result = std::regex_replace(result, re_fogEnd, "u_FogEnd");
+        static const std::regex re_fogScale(R"(\bgl_Fog\.scale\b)");
+        result = std::regex_replace(result, re_fogScale, "u_FogScale");
+        static const std::regex re_fogDensity(R"(\bgl_Fog\.density\b)");
+        result = std::regex_replace(result, re_fogDensity, "u_FogDensity");
+        static const std::regex re_fogColor(R"(\bgl_Fog\.color\b)");
+        result = std::regex_replace(result, re_fogColor, "u_FogColor");
+    }
+
+    // ---- 2.4 注入 Fog uniform 声明 ----
+    {
+        std::string fogDecls;
+        if (result.find("u_FogStart") != std::string::npos)
+            fogDecls += "uniform float u_FogStart;\n";
+        if (result.find("u_FogEnd") != std::string::npos)
+            fogDecls += "uniform float u_FogEnd;\n";
+        if (result.find("u_FogScale") != std::string::npos)
+            fogDecls += "uniform float u_FogScale;\n";
+        if (result.find("u_FogDensity") != std::string::npos)
+            fogDecls += "uniform float u_FogDensity;\n";
+        if (result.find("u_FogColor") != std::string::npos)
+            fogDecls += "uniform vec4 u_FogColor;\n";
+        if (!fogDecls.empty())
+        {
+            size_t versionEnd = result.find('\n', result.find("#version"));
+            if (versionEnd != std::string::npos)
+                result.insert(versionEnd + 1, "// Core profile: Fog Uniform\n" + fogDecls);
+        }
+    }
+
+    // ---- 2.5 注入 u_ModelViewMatrix / u_ProjectionMatrix / u_NormalMatrix uniform 声明 ----
+    {
+        std::string matDecls;
+        if (result.find("u_ModelViewMatrix") != std::string::npos)
+            matDecls += "uniform mat4 u_ModelViewMatrix;\n";
+        if (result.find("u_ProjectionMatrix") != std::string::npos)
+            matDecls += "uniform mat4 u_ProjectionMatrix;\n";
+        if (result.find("u_NormalMatrix") != std::string::npos)
+            matDecls += "uniform mat3 u_NormalMatrix;\n";
+        if (!matDecls.empty())
+        {
+            size_t versionEnd = result.find('\n', result.find("#version"));
+            if (versionEnd != std::string::npos)
+                result.insert(versionEnd + 1, "// Core profile: 矩阵 Uniform\n" + matDecls);
+        }
+    }
+
+    // ---- 3. 顶点着色器：替换内置属性变量为自定义输入变量 ----
+    if (isVertex)
+    {
+        // gl_Vertex → _ia_position（位置属性，location=0）
+        static const std::regex re_vertex(R"(\bgl_Vertex\b)");
+        result = std::regex_replace(result, re_vertex, "_ia_position");
+
+        // gl_Normal → _ia_normal（法线属性，location=2）
+        static const std::regex re_normal(R"(\bgl_Normal\b)");
+        result = std::regex_replace(result, re_normal, "_ia_normal");
+
+        // gl_Color → _ia_color（颜色属性，location=3）
+        static const std::regex re_color(R"(\bgl_Color\b)");
+        result = std::regex_replace(result, re_color, "_ia_color");
+
+        // gl_MultiTexCoord0 → _ia_texCoord0（纹理坐标0，location=8）
+        static const std::regex re_tex0(R"(\bgl_MultiTexCoord0\b)");
+        result = std::regex_replace(result, re_tex0, "_ia_texCoord0");
+
+        // gl_MultiTexCoord1 → _ia_texCoord1（光照纹理坐标，location=9）
+        static const std::regex re_tex1(R"(\bgl_MultiTexCoord1\b)");
+        result = std::regex_replace(result, re_tex1, "_ia_texCoord1");
+
+        // 【第一步】检测是否已有 layout(location = 0) 属性声明
+        // 如果已有，说明是 GLSL 330 格式，不需要注入 _ia_* 属性
+        bool hasLayoutLocation0 = result.find("layout (location = 0)") != std::string::npos ||
+                                  result.find("layout(location = 0)") != std::string::npos;
+
+        if (!hasLayoutLocation0)
+        {
+            // 注入 layout 限定的输入声明（在 #version 行之后）
+            std::string inputDecls = "\n// Core profile: 属性输入声明（替代 compatibility 内置变量）\n";
+            inputDecls += "layout(location = 0) in vec4 _ia_position;\n";
+            inputDecls += "layout(location = 2) in vec3 _ia_normal;\n";
+            inputDecls += "layout(location = 3) in vec4 _ia_color;\n";
+            inputDecls += "layout(location = 8) in vec4 _ia_texCoord0;\n";
+            inputDecls += "layout(location = 9) in vec4 _ia_texCoord1;\n";
+
+            size_t versionEnd = result.find('\n', result.find("#version"));
+            if (versionEnd != std::string::npos)
+                result.insert(versionEnd + 1, inputDecls);
+        }
+    }
+
+    // ---- 3. 注入 u_TextureMatrix uniform 声明（在使用处附近）----
+    {
+        std::string texMatDecls;
+        for (int i = 0; i <= 7; i++)
+        {
+            std::string pattern = "u_TextureMatrix" + std::to_string(i);
+            if (result.find(pattern) != std::string::npos)
+                texMatDecls += "uniform mat4 " + pattern + ";\n";
+        }
+        if (!texMatDecls.empty())
+        {
+            // 在 #version 行之后插入（输入声明之后）
+            size_t versionEnd = result.find('\n', result.find("#version"));
+            if (versionEnd != std::string::npos)
+                result.insert(versionEnd + 1, "// 纹理矩阵 Uniform（替代 gl_TextureMatrix）\n" + texMatDecls);
+        }
+    }
+
     return result;
 }

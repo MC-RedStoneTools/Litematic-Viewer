@@ -126,6 +126,7 @@ void ShaderPackRuntime::Destroy()
     for (auto &[name, fbo] : m_FBOs)
     {
         if (fbo.colorTexture) glDeleteTextures(1, &fbo.colorTexture);
+        if (fbo.colorTexture2) glDeleteTextures(1, &fbo.colorTexture2);
         if (fbo.depthTexture) glDeleteTextures(1, &fbo.depthTexture);
         if (fbo.fbo) glDeleteFramebuffers(1, &fbo.fbo);
     }
@@ -177,6 +178,20 @@ bool ShaderPackRuntime::CompilePass(const std::string &name, const ShaderPassSou
         ShaderPreprocessor::Process(source.vertexSource, true, m_PackData.fileMap, name) : "";
     std::string fragSrc = source.hasFragment ?
         ShaderPreprocessor::Process(source.fragmentSource, false, m_PackData.fileMap, name) : "";
+
+    // 【诊断】dump 预处理后的着色器到文件
+    {
+        auto dumpToFile = [&name](const std::string &ext, const std::string &content) {
+            std::string filename = name + "_" + ext + ".glsl";
+            FILE *f = fopen(filename.c_str(), "w");
+            if (f) {
+                fwrite(content.c_str(), 1, content.size(), f);
+                fclose(f);
+            }
+        };
+        if (!vertSrc.empty()) dumpToFile("vert", vertSrc);
+        if (!fragSrc.empty()) dumpToFile("frag", fragSrc);
+    }
 
     // 跳过没有 main() 的 utility/library pass
     bool vertHasMain = vertSrc.find("void main") != std::string::npos;
@@ -238,13 +253,7 @@ bool ShaderPackRuntime::CompilePass(const std::string &name, const ShaderPassSou
     };
 
     if (source.hasVertex) {
-        size_t before = vertSrc.find("gl_ModelViewMatrix");
         replaceCompatUniforms(vertSrc);
-        size_t after = vertSrc.find("gl_ModelViewMatrix");
-        if (name == "gbuffers_terrain") {
-            gLog.Info("gbuffers_terrain vertex: before=%d, after=%d, hasVertex=%d", 
-                      (int)before, (int)after, source.hasVertex);
-        }
     }
     if (source.hasFragment) {
         replaceCompatUniforms(fragSrc);
@@ -277,38 +286,11 @@ bool ShaderPackRuntime::CompilePass(const std::string &name, const ShaderPassSou
         }
     }
 
-    // 调试：dump gbuffers_terrain 着色器到文件（替换后）
-    if (name == "gbuffers_terrain")
-    {
-        if (source.hasVertex) {
-            FILE *f = fopen("gbuffers_terrain_vert.glsl", "w");
-            if (f) {
-                fprintf(f, "%s", vertSrc.c_str());
-                fclose(f);
-                gLog.Info("Dumped gbuffers_terrain vertex shader to gbuffers_terrain_vert.glsl (%d chars)", (int)vertSrc.size());
-            }
-        }
-        if (source.hasFragment) {
-            FILE *f = fopen("gbuffers_terrain_frag.glsl", "w");
-            if (f) {
-                fprintf(f, "%s", fragSrc.c_str());
-                fclose(f);
-                gLog.Info("Dumped gbuffers_terrain fragment shader to gbuffers_terrain_frag.glsl (%d chars)", (int)fragSrc.size());
-            }
-        }
-    }
-
     // 创建着色器程序
     pass.program = glCreateProgram();
 
-    // 在链接之前绑定属性位置（compatibility 模式内置变量）
-    // 这些绑定确保内置变量映射到正确的属性位置
-    glBindAttribLocation(pass.program, 0, "gl_Vertex");
-    glBindAttribLocation(pass.program, 2, "gl_Normal");
-    glBindAttribLocation(pass.program, 3, "gl_Color");
-    glBindAttribLocation(pass.program, 8, "gl_MultiTexCoord0");
-    glBindAttribLocation(pass.program, 9, "gl_MultiTexCoord1");
-    // Iris 特有属性
+    // 在链接之前绑定属性位置（core 模式下，内置变量已替换为 layout(location=N) 声明）
+    // 只绑定 Iris 特有属性（没有 layout 限定符的自定义属性）
     glBindAttribLocation(pass.program, 10, "mc_Entity");
     glBindAttribLocation(pass.program, 11, "mc_midTexCoord");
     glBindAttribLocation(pass.program, 12, "at_tangent");
@@ -354,8 +336,8 @@ void ShaderPackRuntime::CreateDefaultFBOs(int screenWidth, int screenHeight)
         CreateFBO("shadow", shadowRes, shadowRes, false, true);
     }
 
-    // GBuffer FBO（颜色 + 深度）
-    CreateFBO("gbuffer", screenWidth, screenHeight, true, true);
+    // GBuffer FBO（2个颜色附件 + 深度，MRT 支持）
+    CreateFBO("gbuffer", screenWidth, screenHeight, true, true, 2);
 
     // Composite 系列 FBO（只有颜色）- 支持 composite, composite1, ..., composite15
     for (int i = 0; i <= 15; i++)
@@ -371,16 +353,17 @@ void ShaderPackRuntime::CreateDefaultFBOs(int screenWidth, int screenHeight)
 }
 
 bool ShaderPackRuntime::CreateFBO(const std::string &name, int width, int height,
-                                   bool hasColor, bool hasDepth)
+                                   bool hasColor, bool hasDepth, int numColorAttachments)
 {
     FrameBufferObject fbo;
     fbo.width = width;
     fbo.height = height;
+    fbo.numColorAttachments = hasColor ? numColorAttachments : 0;
 
     glGenFramebuffers(1, &fbo.fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, fbo.fbo);
 
-    // 创建颜色附件
+    // 创建颜色附件 0
     if (hasColor)
     {
         glGenTextures(1, &fbo.colorTexture);
@@ -393,6 +376,25 @@ bool ShaderPackRuntime::CreateFBO(const std::string &name, int width, int height
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_2D, fbo.colorTexture, 0);
+    }
+
+    // 创建颜色附件 1（MRT，用于法线等额外数据）
+    if (hasColor && numColorAttachments >= 2)
+    {
+        glGenTextures(1, &fbo.colorTexture2);
+        glBindTexture(GL_TEXTURE_2D, fbo.colorTexture2);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0,
+                     GL_RGBA, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+                               GL_TEXTURE_2D, fbo.colorTexture2, 0);
+
+        // 设置 MRT draw buffers
+        GLenum drawBuffers[] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+        glDrawBuffers(2, drawBuffers);
     }
 
     // 创建深度附件
@@ -416,6 +418,7 @@ bool ShaderPackRuntime::CreateFBO(const std::string &name, int width, int height
         gLog.Error("FBO 创建失败: %s", name.c_str());
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         if (fbo.colorTexture) glDeleteTextures(1, &fbo.colorTexture);
+        if (fbo.colorTexture2) glDeleteTextures(1, &fbo.colorTexture2);
         if (fbo.depthTexture) glDeleteTextures(1, &fbo.depthTexture);
         glDeleteFramebuffers(1, &fbo.fbo);
         return false;
